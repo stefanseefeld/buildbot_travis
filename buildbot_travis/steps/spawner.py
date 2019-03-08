@@ -58,6 +58,7 @@ class TravisTrigger(Trigger, ConfigurableStepMixin):
             props_to_set.setProperty("TRAVIS_PULL_REQUEST",
                                      self.getProperty("TRAVIS_PULL_REQUEST"),
                                      "inherit")
+            props_to_set.setProperty('platform', self.config.platform, 'spawner')
             flat_env = {}
             for k, v in env.items():
                 if k == "env":

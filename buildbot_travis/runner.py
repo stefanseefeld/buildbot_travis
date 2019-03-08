@@ -17,7 +17,8 @@ from twisted.internet import reactor
 from twisted.internet.threads import deferToThread
 
 from buildbot_travis.steps.create_steps import SetupVirtualEnv
-from buildbot_travis.travisyml import TRAVIS_HOOKS, TravisYml
+from buildbot_travis.config import Config, flatten_env
+from buildbot_travis.travisyml import TravisConfig
 # Fix Python 2.x.
 try: input = raw_input
 except NameError: pass
@@ -25,14 +26,13 @@ except NameError: pass
 [readline]  # is imported for side effect (i.e get decent raw_input)
 
 
-def loadTravisYml():
-    yml = TravisYml()
-    for filename in [".bbtravis.yml", ".travis.yml"]:
+def loadConfig():
+    for filename in ['meta.yml', ".bbtravis.yml", ".travis.yml"]:
         if os.path.exists(filename):
+            config = Config() if filename == 'meta.yml' else TravisConfig()
             with open(filename) as f:
-                yml.parse(f.read())
-            break
-    return yml
+                config.parse(f.read())
+            return config
 
 
 class Runner(object):
@@ -46,7 +46,7 @@ class Runner(object):
             return 1, ""
         popen = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=STDOUT)
         all_text = ""
-        for stdout_line in iter(lambda: popen.stdout.readline(), ""):
+        for stdout_line in iter(lambda: popen.stdout.readline().decode('utf-8'), ""):
             all_text += stdout_line
             if reactor._stopped:
                 popen.terminate()
@@ -70,7 +70,7 @@ class DockerRunner(Runner):
         cwd = os.getcwd()
         volume = cwd + ":" + args.docker_pwd
         image = args.docker_image
-        cmd = ['docker', 'run', '-d', '-v', volume, '-w', args.docker_pwd]
+        cmd = ['docker', 'run', '--network', 'host', '-d', '-v', volume, '-w', args.docker_pwd]
         for env in ['http_proxy', 'https_proxy', 'no_proxy']:
             if env in os.environ:
                 cmd.extend(['-e', env + '=' + os.environ[env]])
@@ -183,40 +183,9 @@ class Ui(object):
         self.redrawing = False
 
 
-def filter_config(config, args):
-    if not args.filters:
-        return
-    new_matrix = []
-    for env in config.matrix:
-        final_env = flatten_env(env)
-        for f in args.filters:
-            k, op, v = f
-            res = False
-            if k in final_env:
-                if op == '==' or op == '=':
-                    res = str(final_env[k]) == v
-                if op == '!=':
-                    res = str(final_env[k]) != v
-            if not res:
-                break
-        if res:
-            new_matrix.append(env)
-    config.matrix = new_matrix
-
-
-def flatten_env(env):
-    flatten_env = {}
-    for k, v in env.items():
-        if k == "env":
-            flatten_env.update(v)
-        else:
-            flatten_env[k] = v
-    return flatten_env
-
-
 def run(args):
-    config = loadTravisYml()
-    filter_config(config, args)
+    config = loadConfig()
+    config.filter(args)
     if not config.matrix:
         print("nothing in matrix (everything filtered?)")
         return
@@ -245,6 +214,8 @@ def run(args):
             ui.addTextForWindow(window, text + "\n")
 
         if not args.dryrun:
+            if config.platform and not args.docker_image:
+                args.docker_image = config.platform
             if args.docker_image:
                 runner = DockerRunner(args, ui, window)
             else:
@@ -255,7 +226,7 @@ def run(args):
             script += "export %s='%s'\n" % (k, v)
             envtitle.append("%s='%s'" % (k, v))
 
-        if 'python' in config.language:
+        if 'python' in config.language and not args.docker_image:
             ve = SetupVirtualEnv(final_env['python'])
             ve.sandboxname = "sandbox" + hashlib.sha1(matrix).hexdigest()
             vecmd = ve.buildCommand()
@@ -267,27 +238,14 @@ def run(args):
 
         print_to_window("running matrix", matrix)
         print_to_window("========================")
-        for k in TRAVIS_HOOKS:
-            print_to_window("running hook", k)
-            print_to_window("--------------------")
-            for command in getattr(config, k):
-                title = None
-                condition = None
-                if isinstance(command, dict):
-                    title = command.get("title")
-                    condition = command.get("condition")
-                    command = command['cmd']
-                if title:
-                    print_to_window("title:", title)
-                if condition and not eval(condition, final_env):
-                    print_to_window("not run because of", condition)
-                    continue
-                print_to_window(command)
-                if not args.dryrun:
-                    rc, out = runner.run(script + "\n" + command)
-                    print_to_window("results:", rc)
-                    if rc:
-                        results = rc
+        for t in config.tasks(final_env):
+            print_to_window('title:', f'{t.name}')
+            print_to_window(f'{t.command}')
+            if not args.dryrun:
+                rc, out = runner.run(script + "\n" + t.command)
+                print_to_window("results:", rc)
+                if rc:
+                    results = rc
         if not args.dryrun:
             runner.close()
         print_to_window("DONE! results:", results)

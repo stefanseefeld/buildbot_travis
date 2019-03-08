@@ -17,4 +17,4 @@ from __future__ import division
 from __future__ import print_function
 
 from .spawner import TravisTrigger
-from .create_steps import TravisSetupSteps
+from .create_steps import MetaSetupSteps, TravisSetupSteps

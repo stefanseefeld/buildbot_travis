@@ -9,7 +9,7 @@ import subprocess
 
 from buildbot_travis import runner
 
-filter_re = re.compile("([A-Z0-9_]+)(!?=)(.*)")
+filter_re = re.compile("([a-zA-Z0-9_]+)(!?=)(.*)")
 
 
 def parse_filter(f):
@@ -19,8 +19,15 @@ def parse_filter(f):
     return res.group(1), res.group(2), res.group(3)
 
 MASTERCFG = """
+from buildbot.plugins import util
+from buildbot.worker.local import LocalWorker
+from buildbot.worker.docker import DockerLatentWorker
 from buildbot_travis import TravisConfigurator
 c = BuildmasterConfig = {}
+c['workers'] = [LocalWorker('spawner'),
+                DockerLatentWorker('runner', password=None,
+                                   docker_host='unix:///var/run/docker.sock',
+                                   image=util.Interpolate('%(prop:platform)s'))]
 TravisConfigurator(BuildmasterConfig, basedir).fromYaml('cfg.yml')
 """
 

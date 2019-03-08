@@ -20,8 +20,8 @@ from twisted.internet import defer
 
 from buildbot.process import buildstep
 from buildbot.steps.worker import CompositeStepMixin
-
-from ..travisyml import TravisYml, TravisYmlInvalid
+from ..config import Invalid
+from ..travisyml import Config, TravisConfig
 
 
 HOW_TO_DEBUG = """
@@ -39,7 +39,7 @@ class ConfigurableStepMixin(CompositeStepMixin):
     """
     Base class for a step which can be tuned by changing settings in .travis.yml
     """
-    TRAVIS_FILENAMES = [".bbtravis.yml", ".travis.yml"]
+    TRAVIS_FILENAMES = ['meta.yml', ".bbtravis.yml", ".travis.yml"]
 
     def getResultSummary(self):
         if self.descriptionDone is not None:
@@ -70,10 +70,11 @@ class ConfigurableStepMixin(CompositeStepMixin):
 
         self.addCompleteLog(filename, travis_yml)
 
-        config = TravisYml()
+        #config = TravisConfig()
+        config = Config()
         try:
             config.parse(travis_yml)
-        except TravisYmlInvalid as e:
+        except Invalid as e:
             self.descriptionDone = u"bad .travis.yml"
             self.addCompleteLog(
                 "error",

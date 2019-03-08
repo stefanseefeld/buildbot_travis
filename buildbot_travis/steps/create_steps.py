@@ -25,7 +25,7 @@ from buildbot.process.buildstep import (SUCCESS, BuildStep, LoggingBuildStep,
                                         ShellMixin)
 from buildbot.steps import shell
 
-from ..travisyml import TRAVIS_HOOKS
+from ..config import Config
 from .base import ConfigurableStep
 
 
@@ -284,4 +284,24 @@ class TravisSetupSteps(ConfigurableStep):
             for command in getattr(config, k):
                 self.addBBTravisStep(command=command)
 
+        defer.returnValue(SUCCESS)
+
+
+class MetaSetupSteps(ConfigurableStep):
+
+    name = "setup-steps"
+    haltOnFailure = True
+    flunkOnFailure = True
+    MAX_NAME_LENGTH = 47
+    disable = False
+
+    @defer.inlineCallbacks
+    def run(self):
+        config = yield self.getStepConfig()
+        for task in config.tasks('_'):
+            step = ShellCommand(name=task.name,
+                                description=task.command,
+                                command=task.command,
+                                doStepIf=not self.disable)
+            self.build.addStepsAfterLastStep([step])
         defer.returnValue(SUCCESS)

@@ -25,7 +25,7 @@ from buildbot.www.authz.endpointmatchers import EndpointMatcherBase, Match
 from buildbot.www.authz.roles import RolesFromBase
 
 from .important import ImportantManager
-from .steps import TravisSetupSteps, TravisTrigger
+from .steps import MetaSetupSteps, TravisSetupSteps, TravisTrigger
 from .vcs import addRepository, getSupportedVCSTypes
 
 
@@ -361,7 +361,8 @@ class TravisConfigurator(object):
         # Define the builder for the main job
         f = factory.BuildFactory()
         vcsManager.addSourceSteps(f)
-        f.addStep(TravisSetupSteps())
+        #f.addStep(TravisSetupSteps())
+        f.addStep(MetaSetupSteps())
 
         self.config['builders'].append(BuilderConfig(
             name=job_name,
@@ -400,7 +401,8 @@ class TravisConfigurator(object):
             # Define the builder for the deployment of the project
             f = factory.BuildFactory()
             vcsManager.addSourceSteps(f)
-            f.addStep(TravisSetupSteps())
+            #f.addStep(TravisSetupSteps())
+            f.addStep(MetaSetupSteps())
 
             # To manage deployment properly (with change traceability),
             # we need the version and the target deployment environment or "stage"

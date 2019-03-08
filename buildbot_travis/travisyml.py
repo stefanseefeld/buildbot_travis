@@ -23,117 +23,61 @@ import yaml
 from buildbot.plugins import util
 from buildbot.plugins.db import get_plugins
 
-TRAVIS_HOOKS = ("before_install", "install", "after_install", "before_script",
-                "script", "after_script")
+from .config import Config, Stage, Invalid, Loader
+from .config import flatten_env, parse_env_string
 
-
-class TravisYmlInvalid(Exception):
-    pass
-
-
-def parse_env_string(env, global_env=None):
-    props = {}
-    if global_env:
-        props.update(global_env)
-    if not env.strip():
-        return props
-
-    _vars = env.split(" ")
-    for v in _vars:
-        k, v = v.split("=", 1)
-        props[k] = v
-
-    return props
-
-
-def interpolate_constructor(loader, node):
-    value = loader.construct_scalar(node)
-    return util.Interpolate(value)
-
-
-class TravisLoader(yaml.SafeLoader):
-    pass
-
-TravisLoader.add_constructor(u'!Interpolate', interpolate_constructor)
-TravisLoader.add_constructor(u'!i', interpolate_constructor)
-
-
-def registerStepClass(name, step):
-    def step_constructor(loader, node):
-        args = []
-        kwargs = {}
-        exceptions = []
-        try:
-            args = [loader.construct_scalar(node)]
-        except Exception as e:
-            exceptions.append(e)
-        try:
-            args = loader.construct_sequence(node)
-        except Exception as e:
-            exceptions.append(e)
-        try:
-            kwargs = loader.construct_mapping(node)
-        except Exception as e:
-            exceptions.append(e)
-
-        if len(exceptions) == 3:
-            raise Exception("Could not parse steps arguments: {}".format(
-                " ".join([str(x) for x in exceptions])))
-        return step(*args, **kwargs)
-
-    TravisLoader.add_constructor(u'!' + name, step_constructor)
-
-steps = get_plugins('steps', None, load_now=True)
-for step in steps.names:
-    registerStepClass(step, steps.get(step))
-
-
-class TravisYml(object):
-    """
-    Loads a .travis.yml file and parses it.
-    """
+class TravisConfig(Config):
 
     def __init__(self):
-        self.language = None
-        self.image = None
-        self.environments = [{}]
-        self.matrix = []
-        for hook in TRAVIS_HOOKS:
-            setattr(self, hook, [])
-        self.branch_whitelist = None
-        self.branch_blacklist = None
+        super(TravisConfig, self).__init__()
         self.email = TravisYmlEmail()
         self.irc = TravisYmlIrc()
-        self.config = None
 
     def parse(self, config_input):
         try:
-            d = yaml.load(config_input, Loader=TravisLoader)
+            d = yaml.load(config_input, Loader=Loader)
         except Exception as e:
-            raise TravisYmlInvalid("Invalid YAML data\n" + str(e))
-        self.parse_dict(d)
+            raise Invalid("Invalid YAML data\n" + str(e))
+        self.config = d
+        self._parse_language()
+        self._parse_label_mapping()
+        self._parse_envs()
+        self._parse_matrix()
+        self._parse_stages()
+        self._parse_branches()
+        self._parse_notifications_email()
+        self._parse_notifications_irc()
 
-    def parse_dict(self, config):
-        self.config = config
-        self.parse_language()
-        self.parse_label_mapping()
-        self.parse_envs()
-        self.parse_matrix()
-        self.parse_hooks()
-        self.parse_branches()
-        self.parse_notifications_email()
-        self.parse_notifications_irc()
+    def filter(self, args):
+        if not args.filters:
+            return
+        new_matrix = []
+        for env in self.matrix:
+            final_env = flatten_env(env)
+            for f in args.filters:
+                k, op, v = f
+                res = False
+                if k in final_env:
+                    if op == '==' or op == '=':
+                        res = str(final_env[k]) == v
+                    if op == '!=':
+                        res = str(final_env[k]) != v
+                if not res:
+                    break
+            if res:
+                new_matrix.append(env)
+        self.matrix = new_matrix
 
-    def parse_language(self):
+    def _parse_language(self):
         try:
             self.language = self.config['language']
         except:
-            raise TravisYmlInvalid("'language' parameter is missing")
+            raise Invalid("'language' parameter is missing")
 
-    def parse_label_mapping(self):
+    def _parse_label_mapping(self):
         self.label_mapping = self.config.get('label_mapping', {})
 
-    def parse_envs(self):
+    def _parse_envs(self):
         env = self.config.get("env", None)
         self.global_env = {}
         if env is None:
@@ -153,38 +97,20 @@ class TravisYml(object):
                 for e in env.get('matrix', [''])
             ]
         else:
-            raise TravisYmlInvalid("'env' parameter is invalid")
+            raise Invalid("'env' parameter is invalid")
 
-    def parse_hooks(self):
-        for hook in TRAVIS_HOOKS:
-            commands = self.config.get(hook, [])
+    def _parse_stages(self):
+        self.stages = []
+        for s in ("before_install", "install", "after_install", "before_script",
+                  "script", "after_script"):
+            commands = self.config.get(s, [])
             if isinstance(commands, string_types):
                 commands = [commands]
             if not isinstance(commands, list):
-                raise TravisYmlInvalid("'%s' parameter is invalid" % hook)
-            setattr(self, hook, commands)
+                raise Invalid("'%s' parameter is invalid" % s)
+            self.stages.append(Stage(name=s, sources=[], packages=[], tasks=commands))
 
-    def parse_branches(self):
-        branches = self.config.get("branches", None)
-        if not branches:
-            return
-
-        if "only" in branches:
-            if not isinstance(branches['only'], list):
-                raise TravisYmlInvalid('branches.only should be a list')
-            self.branch_whitelist = branches['only']
-            return
-
-        if "except" in branches:
-            if not isinstance(branches['except'], list):
-                raise TravisYmlInvalid('branches.except should be a list')
-            self.branch_blacklist = branches['except']
-            return
-
-        raise TravisYmlInvalid(
-            "'branches' parameter contains neither 'only' nor 'except'")
-
-    def parse_matrix(self):
+    def _parse_matrix(self):
         matrix = []
         python = self.config.get("python", ["python2.6"])
         if not isinstance(python, list):
@@ -221,34 +147,13 @@ class TravisYml(object):
 
         self.matrix = matrix
 
-    def parse_notifications_irc(self):
+    def _parse_notifications_irc(self):
         notifications = self.config.get("notifications", {})
         self.irc.parse(notifications.get("irc", {}))
 
-    def parse_notifications_email(self):
+    def _parse_notifications_email(self):
         notifications = self.config.get("notifications", {})
         self.email.parse(notifications.get("email", {}))
-
-    def _match_branch(self, branch, lst):
-        for b in lst:
-            if b.startswith("/") and b.endswith("/"):
-                if re.search(b[1:-1], branch):
-                    return True
-            else:
-                if b == branch:
-                    return True
-        return False
-
-    def can_build_branch(self, branch):
-        if self.branch_whitelist is not None:
-            if self._match_branch(branch, self.branch_whitelist):
-                return True
-            return False
-        if self.branch_blacklist is not None:
-            if self._match_branch(branch, self.branch_blacklist):
-                return False
-            return True
-        return True
 
 
 class _NotificationsMixin(object):
